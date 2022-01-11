@@ -32,6 +32,7 @@ import org.apache.doris.catalog.DistributionInfo;
 import org.apache.doris.catalog.HashDistributionInfo;
 import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.Table;
+import org.apache.doris.clickhouse.planner.CHScanNode;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Pair;
 import org.apache.doris.common.UserException;
@@ -919,7 +920,6 @@ public class DistributedPlanner {
             childFragment.addPlanRoot(node);
             return childFragment;
         }
-
         if (node.getAggInfo().isDistinctAgg()) {
             // 'node' is phase 1 of a DISTINCT aggregation; the actual agg fragment
             // will get created in the next createAggregationFragment() call
@@ -929,7 +929,10 @@ public class DistributedPlanner {
         }
 
         // check size
-        if (childFragment.getPlanRoot().getNumInstances() <= 1) {
+        if (childFragment.getPlanRoot().getNumInstances() <= 1
+                && !(node.getChildren().size() == 1
+                && node.getChild(0) instanceof CHScanNode
+                && ConnectContext.get().getSessionVariable().isEnablePushdownAggToCH())) {
             childFragment.addPlanRoot(node);
             return childFragment;
         }
@@ -1119,6 +1122,14 @@ public class DistributedPlanner {
         mergeAggNode.computeStats(ctx_.getRootAnalyzer());
         // Set new plan root after updating stats.
         mergeFragment.addPlanRoot(mergeAggNode);
+
+        if (node.getChildren().size() == 1 && node.getChild(0) instanceof CHScanNode) {
+            CHScanNode scanNode = (CHScanNode) node.getChild(0);
+            if (scanNode.supportAggregationPushDown(node)) {
+                scanNode.pushDownAggregationNode(node.getAggInfo(), ctx_.getRootAnalyzer().getDescTbl());
+                childFragment.setPlanRoot(scanNode);
+            }
+        }
 
         return mergeFragment;
     }
@@ -1346,5 +1357,4 @@ public class DistributedPlanner {
 
         return mergeFragment;
     }
-
 }
